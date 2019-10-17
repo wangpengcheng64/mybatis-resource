@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE configuration PUBLIC "-//mybatis.org//DTD Config 3.0//EN" "http://mybatis.org/dtd/mybatis-3-config.dtd">
+<configuration>
+    <!-- 方法一： 从外部指定properties配置文件, 除了使用resource属性指定外，还可通过url属性指定url -->
+    <properties resource="db.properties"/>
+    <!-- 方法二： 直接配置为xml
+    <properties>
+        <property name="driver" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/test"/>
+        <property name="username" value="root"/>
+        <property name="password" value="123456"/>
+    </properties> -->
+
+    <!-- 为JAVA Bean起类别名 -->
+    <typeAliases>
+        <!-- 别名方式1，一个一个的配置 type中放置的是类的全路径，alias中放置的是类别名
+        <typeAlias type="com.wpc.bean.User" alias="User"/>-->
+        <!-- 别名方式2，自动扫描，将JAVA类的类名作为类的类别名 -->
+        <package name="pojo"/>
+    </typeAliases>
+
+    <!-- 配置mybatis运行环境 -->
+    <environments default="default">
+        <environment id="default">
+            <!-- type="JDBC" 代表使用JDBC的提交和回滚来管理事务 -->
+            <transactionManager type="JDBC"/>
+            <!-- mybatis提供了3种数据源类型，分别是：POOLED,UNPOOLED,JNDI -->
+            <!-- POOLED 表示支持JDBC数据源连接池 -->
+            <!-- UNPOOLED 表示不支持数据源连接池 -->
+            <!-- JNDI 表示支持外部数据源连接池 -->
+            <dataSource type="POOLED">
+                <!--如果上面没有指定数据库配置的properties文件，那么此处可以这样直接配置
+                <property name="driver" value="com.mysql.jdbc.Driver"/>
+                <property name="url" value="jdbc:mysql://localhost:3306/test1"/>
+                <property name="username" value="root"/>
+                <property name="password" value="root"/> -->
+
+                <!-- 上面指定了数据库配置文件， 配置文件里面也是对应的这四个属性 -->
+                <property name="driver" value="${jdbc.driver}"/>
+                <property name="url" value="${jdbc.url}"/>
+                <property name="username" value="${jdbc.username}"/>
+                <property name="password" value="${jdbc.password}"/>
+            </dataSource>
+        </environment>
+    </environments>
+
+    <mappers>
+        <!-- 第一种方式：通过resource指定 -->
+        <mapper resource="mapping/UserMapper.xml"/>
+        <!-- 第二种方式， 通过class指定接口，进而将接口与对应的xml文件形成映射关系
+             不过，使用这种方式必须保证 接口与mapper文件同名(不区分大小写)，
+             我这儿接口是UserMapper,那么意味着mapper文件为UserMapper.xml
+             包名相同，加载java类包下的配置文件需配置pom.xml文件
+        <mapper class="com.wpc.mapper.UserMapper"/> -->
+        <!-- 第三种方式，直接指定包，自动扫描，与方法二同理
+        <package name="com.wpc.mapper"/> -->
+        <!-- 第四种方式：通过url指定mapper.xml文件位置
+        <mapper url="file://........"/> -->
+    </mappers>
+</configuration>

@@ -1,0 +1,182 @@
+3，通过sqlSession获取mapper接口实例（动态代理）
+public class DefaultSqlSession implements SqlSession {
+    @Override
+    public <T> T getMapper(Class<T> type) {
+        return configuration.<T>getMapper(type, this);
+    }
+}
+public class Configuration {
+    public <T> T getMapper(Class<T> type, SqlSession sqlSession) {
+        return mapperRegistry.getMapper(type, sqlSession);
+    }
+}
+public class MapperRegistry {
+    public <T> T getMapper(Class<T> type, SqlSession sqlSession) {
+        // 获取mapper代理工厂，在解析mapper接口及mapper.xml文件时生成的
+        final MapperProxyFactory<T> mapperProxyFactory = (MapperProxyFactory<T>) knownMappers.get(type);
+        if (mapperProxyFactory == null) {
+            throw new BindingException("Type " + type + " is not known to the MapperRegistry.");
+        }
+        try {
+            // 重点，获取实例
+            return mapperProxyFactory.newInstance(sqlSession);
+        } catch (Exception e) {
+            throw new BindingException("Error getting mapper instance. Cause: " + e, e);
+        }
+    }
+}
+public class MapperProxyFactory<T> {
+    private final Class<T> mapperInterface;
+    private final Map<Method, MapperMethod> methodCache = new ConcurrentHashMap<>();
+
+    @SuppressWarnings("unchecked")
+    protected T newInstance(MapperProxy<T> mapperProxy) {
+        // jdk动态代理
+        return (T) Proxy.newProxyInstance(mapperInterface.getClassLoader(), new Class[] { mapperInterface }, mapperProxy);
+    }
+
+    public T newInstance(SqlSession sqlSession) {
+        // 生成代理类
+        final MapperProxy<T> mapperProxy = new MapperProxy<>(sqlSession, mapperInterface, methodCache);
+        return newInstance(mapperProxy);
+    }
+
+}
+
+public class MapperProxy<T> implements InvocationHandler, Serializable {
+    private final SqlSession sqlSession;
+    private final Class<T> mapperInterface;
+    private final Map<Method, MapperMethod> methodCache;
+
+    public MapperProxy(SqlSession sqlSession, Class<T> mapperInterface, Map<Method, MapperMethod> methodCache) {
+        this.sqlSession = sqlSession;
+        this.mapperInterface = mapperInterface;
+        this.methodCache = methodCache;
+    }
+
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        try {
+            // 如果是Object的方法则直接执行，不进行代理
+            if (Object.class.equals(method.getDeclaringClass())) {
+                return method.invoke(this, args);
+            // 既不是静态方法也不是接口方法
+            } else if (isDefaultMethod(method)) {
+                return invokeDefaultMethod(proxy, method, args);
+            }
+        } catch (Throwable t) {
+            throw ExceptionUtil.unwrapThrowable(t);
+        }
+        final MapperMethod mapperMethod = cachedMapperMethod(method);
+        // mapper接口方法的执行，即增删改查
+        return mapperMethod.execute(sqlSession, args);
+    }
+
+    private MapperMethod cachedMapperMethod(Method method) {
+        return methodCache.computeIfAbsent(method, k -> new MapperMethod(mapperInterface, method, sqlSession.getConfiguration()));
+    }
+
+    private Object invokeDefaultMethod(Object proxy, Method method, Object[] args)
+            throws Throwable {
+        final Constructor<MethodHandles.Lookup> constructor = MethodHandles.Lookup.class
+                .getDeclaredConstructor(Class.class, int.class);
+        if (!constructor.isAccessible()) {
+            constructor.setAccessible(true);
+        }
+        final Class<?> declaringClass = method.getDeclaringClass();
+        return constructor
+                .newInstance(declaringClass,
+                        MethodHandles.Lookup.PRIVATE | MethodHandles.Lookup.PROTECTED
+                                | MethodHandles.Lookup.PACKAGE | MethodHandles.Lookup.PUBLIC)
+                .unreflectSpecial(method, declaringClass).bindTo(proxy).invokeWithArguments(args);
+    }
+
+    private boolean isDefaultMethod(Method method) {
+        return (method.getModifiers()
+                & (Modifier.ABSTRACT | Modifier.PUBLIC | Modifier.STATIC)) == Modifier.PUBLIC
+                && method.getDeclaringClass().isInterface();
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+4，mapper访问数据库的底层原理
+
+
+
+
+
+
+
+
+
+
+5，mapper如何将数据库数据转换成java对象的
+
+
+
+
+
+
+
+
+
+
+
+
+6，拦截器（Interceptor）的实现原理及自定义拦截器
+
+
+
+
+
+
+
+
+
+
+
+
+
+7，一级缓存和二级缓存的实现
+
+
+
+
+
+
+
+
+
+
+
+
+8，事务管理机制

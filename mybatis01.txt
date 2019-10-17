@@ -1,0 +1,248 @@
+1，SqlSessionFactory及Configuration的创建过程，mybatis配置文件的加载
+public class SqlSessionFactoryBuilder {
+    // 构建SqlSessionFactory
+    public SqlSessionFactory build(InputStream inputStream) {
+        return this.build((InputStream)inputStream, (String)null, (Properties)null);
+    }
+    // 构建SqlSessionFactory
+    public SqlSessionFactory build(InputStream inputStream, String environment, Properties properties) {
+        SqlSessionFactory var5;
+        try {
+            // 初始化Configuration等一系列对象，将文件流转换成Document对象
+            XMLConfigBuilder parser = new XMLConfigBuilder(inputStream, environment, properties);
+            // 返回DefaultSqlSessionFactory对象，内含参数configuration
+            var5 = this.build(parser.parse());
+        } catch (Exception var14) {
+            throw ExceptionFactory.wrapException("Error building SqlSession.", var14);
+        } finally {
+            ErrorContext.instance().reset();
+            try {
+                inputStream.close();
+            } catch (IOException var13) {}
+        }
+        return var5;
+    }
+    // 有参（configuration）构建DefaultSqlSessionFactory对象返回
+    public SqlSessionFactory build(Configuration config) {
+        return new DefaultSqlSessionFactory(config);
+    }
+}
+
+public class XMLConfigBuilder extends BaseBuilder {
+    public XMLConfigBuilder(InputStream inputStream, String environment, Properties props) {
+        // 创建XMLMapperEntityResolver对象，用于验证xml是否符合dtd的（根据doctype）
+        // EntityResolver对象就是从classpath中去寻找.dtd文件(文件就在org/apache/ibatis/builder/xml/目录下)，在spring中还会存在.xsd文件，原理都是一样的，然后利用classpath中的.dtd文件进行验证。
+        // 如果不指定这个.dtd文件，那么会从互联网上面下载.dtd文件，性能不好
+        this(new XPathParser(inputStream, true, props, new XMLMapperEntityResolver()), environment, props);
+    }
+    private XMLConfigBuilder(XPathParser parser, String environment, Properties props) {
+        // 调用父类方法，创建Configuration对象（仅仅是对象创建了，但未构造好），及其他属性初始化
+        super(new Configuration());
+        ErrorContext.instance().resource("SQL Mapper Configuration");
+        this.configuration.setVariables(props);
+        this.parsed = false;
+        this.environment = environment;
+        this.parser = parser;
+    }
+    public Configuration parse() {
+        // 判断是否已经解析
+        if (parsed) {
+            throw new BuilderException("Each XMLConfigBuilder can only be used once.");
+        }
+        parsed = true;
+        // 获取mybatis配置文件中的configuration节点
+        parseConfiguration(parser.evalNode("/configuration"));
+        return configuration;
+    }
+    // 解析configuration，实际上是给configuration对象属性赋值，下面都是解析配置文件中configuration节点中各子节点属性
+    private void parseConfiguration(XNode root) {
+        try {
+            //issue #117 read properties first
+            propertiesElement(root.evalNode("properties")); // 读取引入外部配置文件
+            Properties settings = settingsAsProperties(root.evalNode("settings")); // settting 标签中有很多属性，开启开启二级缓存/延迟加载等
+            loadCustomVfs(settings);
+            loadCustomLogImpl(settings);
+            typeAliasesElement(root.evalNode("typeAliases")); // 实体别名设置
+            pluginElement(root.evalNode("plugins")); // 主要作用简单说就是拦截映射语句执行过程进行拦截从而做出特定的操作
+            objectFactoryElement(root.evalNode("objectFactory"));
+            objectWrapperFactoryElement(root.evalNode("objectWrapperFactory"));
+            reflectorFactoryElement(root.evalNode("reflectorFactory"));
+            settingsElement(settings);
+            // read it after objectFactory and objectWrapperFactory issue #631
+            environmentsElement(root.evalNode("environments")); // 环境配置
+            databaseIdProviderElement(root.evalNode("databaseIdProvider")); // 通过配置来执行不容数据库的sql语句
+            typeHandlerElement(root.evalNode("typeHandlers")); // 主要就是Mybatis用来处理数据库和实体之间的类型转换的类型处理器
+            mapperElement(root.evalNode("mappers")); // mapper.xml文件加载，主要负责注册映射关系（绑定接口与sql）
+        } catch (Exception e) {
+            throw new BuilderException("Error parsing SQL Mapper Configuration. Cause: " + e, e);
+        }
+    }
+    // 读取引入外部配置文件
+    private void propertiesElement(XNode context) throws Exception {
+        if (context != null) {
+            // 首先加载xml内部属性，所以外部配置文件的属性会覆盖内部属性！！！
+            Properties defaults = context.getChildrenAsProperties();
+            // 获取外部配置文件resource属性值
+            String resource = context.getStringAttribute("resource");
+            // 获取外部配置文件url属性值
+            String url = context.getStringAttribute("url");
+            // 两个属性值不能同时存在
+            if (resource != null && url != null) {
+                throw new BuilderException("The properties element cannot specify both a URL and a resource based property file reference.  Please specify one or the other.");
+            }
+            // 解析外部配置文件key-value
+            if (resource != null) {
+                defaults.putAll(Resources.getResourceAsProperties(resource));
+            } else if (url != null) {
+                defaults.putAll(Resources.getUrlAsProperties(url));
+            }
+            Properties vars = configuration.getVariables();
+            if (vars != null) {
+                defaults.putAll(vars);
+            }
+            // parser及configuration属性设置
+            parser.setVariables(defaults);
+            configuration.setVariables(defaults);
+        }
+    }
+    // 实体别名设置
+    private void typeAliasesElement(XNode parent) {
+        if (parent != null) {
+            for (XNode child : parent.getChildren()) {
+                // 查看配置文件，有两种配置方式
+                if ("package".equals(child.getName())) {
+                    String typeAliasPackage = child.getStringAttribute("name");
+                    configuration.getTypeAliasRegistry().registerAliases(typeAliasPackage);
+                } else {
+                    String alias = child.getStringAttribute("alias");
+                    String type = child.getStringAttribute("type");
+                    try {
+                        Class<?> clazz = Resources.classForName(type);
+                        // 如果alias属性为null，则默认取类名（会先判断类上是否有Alias注解，如果有则取注解值），驼峰命名方式
+                        if (alias == null) {
+                            typeAliasRegistry.registerAlias(clazz);
+                        } else {
+                            typeAliasRegistry.registerAlias(alias, clazz);
+                        }
+                    } catch (ClassNotFoundException e) {
+                        throw new BuilderException("Error registering typeAlias for '" + alias + "'. Cause: " + e, e);
+                    }
+                }
+            }
+        }
+    }
+    // 环境配置
+    private void environmentsElement(XNode context) throws Exception {
+        if (context != null) {
+            if (environment == null) {
+                // 解析environments节点上的default属性值 <environments default="default">
+                environment = context.getStringAttribute("default");
+            }
+            // 递归解析子节点
+            for (XNode child : context.getChildren()) {
+                // 获取id属性，用id来区别不同环境
+                String id = child.getStringAttribute("id");
+                // 根据environments的default属性去加载对应的环境
+                if (isSpecifiedEnvironment(id)) {
+                    // 事务，mybatis有两种：JDBC 和 MANAGED, 配置为JDBC则直接使用JDBC的事务，配置为MANAGED则是将事务托管给容器
+                    TransactionFactory txFactory = transactionManagerElement(child.evalNode("transactionManager"));
+                    // 解析数据源信息dataSource
+                    DataSourceFactory dsFactory = dataSourceElement(child.evalNode("dataSource"));
+                    DataSource dataSource = dsFactory.getDataSource();
+                    Environment.Builder environmentBuilder = new Environment.Builder(id)
+                            .transactionFactory(txFactory)
+                            .dataSource(dataSource);
+                    // 将数据源信息设置到configuration中
+                    configuration.setEnvironment(environmentBuilder.build());
+                }
+            }
+        }
+    }
+    // 解析数据源信息dataSource
+    private DataSourceFactory dataSourceElement(XNode context) throws Exception {
+        if (context != null) {
+            // mybatis提供了3种数据源类型，分别是：POOLED,UNPOOLED,JNDI, 配置文件中有对应解释
+            String type = context.getStringAttribute("type");
+            // 解析property标签
+            Properties props = context.getChildrenAsProperties();
+            // 获取对应的数据源工厂
+            DataSourceFactory factory = (DataSourceFactory) resolveClass(type).newInstance();
+            factory.setProperties(props);
+            return factory;
+        }
+        throw new BuilderException("Environment declaration requires a DataSourceFactory.");
+    }
+    // 加载mapper映射文件，主要负责注册映射关系（绑定接口与sql）
+    private void mapperElement(XNode parent) throws Exception {
+        if (parent != null) {
+            for (XNode child : parent.getChildren()) {
+                // mapper映射有四种方式，具体看配置文件介绍
+                if ("package".equals(child.getName())) {
+                    String mapperPackage = child.getStringAttribute("name");
+                    configuration.addMappers(mapperPackage);
+                } else {
+                    String resource = child.getStringAttribute("resource");
+                    String url = child.getStringAttribute("url");
+                    String mapperClass = child.getStringAttribute("class");
+                    if (resource != null && url == null && mapperClass == null) { //根据resource解析
+                        ErrorContext.instance().resource(resource);
+                        // 获取资源输入流
+                        InputStream inputStream = Resources.getResourceAsStream(resource);
+                        XMLMapperBuilder mapperParser = new XMLMapperBuilder(inputStream, configuration, resource, configuration.getSqlFragments());
+                        mapperParser.parse();
+                    } else if (resource == null && url != null && mapperClass == null) { //根据url解析
+                        ErrorContext.instance().resource(url);
+                        InputStream inputStream = Resources.getUrlAsStream(url);
+                        XMLMapperBuilder mapperParser = new XMLMapperBuilder(inputStream, configuration, url, configuration.getSqlFragments());
+                        mapperParser.parse();
+                    } else if (resource == null && url == null && mapperClass != null) { //根据class解析
+                        Class<?> mapperInterface = Resources.classForName(mapperClass);
+                        configuration.addMapper(mapperInterface);
+                    } else {
+                        throw new BuilderException("A mapper element may only specify a url, resource or class, but not more than one.");
+                    }
+                }
+            }
+        }
+    }
+
+}
+// XML文件解析器，并将${}中的内容用properties文件中对应的值替换
+public class XPathParser {
+    public XPathParser(InputStream inputStream, boolean validation, Properties variables, EntityResolver entityResolver) {
+        // 相关属性赋值
+        commonConstructor(validation, variables, entityResolver);
+        // 根据配置文件输入流创建document对象
+        this.document = createDocument(new InputSource(inputStream));
+    }
+    public XNode evalNode(String expression) {
+        return evalNode(document, expression);
+    }
+    public XNode evalNode(Object root, String expression) {
+        // 获取configuration节点信息
+        Node node = (Node) evaluate(expression, root, XPathConstants.NODE);
+        if (node == null) {
+            return null;
+        }
+        // 封装成XNode对象返回
+        return new XNode(this, node, variables);
+    }
+}
+
+public class XNode {
+    private final Node node; // 节点对象
+    private final String name; // 节点名称
+    private final String body;
+    private final Properties attributes;
+    private final Properties variables; // 外部配置文件属性
+    private final XPathParser xpathParser; // 解析器
+    // 构造方法，属性封装
+    public XNode(XPathParser xpathParser, Node node, Properties variables) {
+        this.xpathParser = xpathParser;
+        this.node = node;
+        this.name = node.getNodeName();
+        this.variables = variables;
+        this.attributes = parseAttributes(node);
+        this.body = parseBody(node);
+    }
+}

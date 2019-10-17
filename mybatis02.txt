@@ -1,0 +1,285 @@
+2，mapper接口及mapper.xml文件的解析过程，sqlSession的获取
+1)根据package或class指定加载mapper
+public class Configuration {
+    public void addMappers(String packageName) {
+        mapperRegistry.addMappers(packageName);
+    }
+    public <T> void addMapper(Class<T> type) {
+        mapperRegistry.addMapper(type);
+    }
+}
+public class MapperRegistry {
+    private final Configuration config;
+    private final Map<Class<?>, MapperProxyFactory<?>> knownMappers = new HashMap<>();
+    public void addMappers(String packageName) {
+        addMappers(packageName, Object.class);
+    }
+    public void addMappers(String packageName, Class<?> superType) {
+        ResolverUtil<Class<?>> resolverUtil = new ResolverUtil<>();
+        resolverUtil.find(new ResolverUtil.IsA(superType), packageName);
+        // 根据包名获取所有mapper.class文件
+        Set<Class<? extends Class<?>>> mapperSet = resolverUtil.getClasses();
+        // 遍历解析
+        for (Class<?> mapperClass : mapperSet) {
+            addMapper(mapperClass);
+        }
+    }
+    // 最终解析方法
+    public <T> void addMapper(Class<T> type) {
+        if (type.isInterface()) {
+            // 判断是否已经解析
+            if (hasMapper(type)) {
+                throw new BindingException("Type " + type + " is already known to the MapperRegistry.");
+            }
+            boolean loadCompleted = false;
+            try {
+                // 将mapper信息放入knownMappers容器中，后续获取mapper代理对象会用到
+                knownMappers.put(type, new MapperProxyFactory<>(type));
+                // It's important that the type is added before the parser is run
+                // otherwise the binding may automatically be attempted by the
+                // mapper parser. If the type is already known, it won't try.
+                // 初始化MapperAnnotationBuilder对象，相关属性赋值
+                MapperAnnotationBuilder parser = new MapperAnnotationBuilder(config, type);
+                // 开始解析
+                parser.parse();
+                loadCompleted = true;
+            } finally {
+                if (!loadCompleted) {
+                    knownMappers.remove(type);
+                }
+            }
+        }
+    }
+    // knownMappers存储已解析mapper容器，判断是否解析
+    public <T> boolean hasMapper(Class<T> type) {
+        return knownMappers.containsKey(type);
+    }
+}
+public class MapperAnnotationBuilder {
+public MapperAnnotationBuilder(Configuration configuration, Class<?> type) {
+        String resource = type.getName().replace('.', '/') + ".java (best guess)";
+        this.assistant = new MapperBuilderAssistant(configuration, resource);
+        this.configuration = configuration;
+        this.type = type;
+    }
+    // mapper映射解析
+    public void parse() {
+        String resource = type.toString();
+        // 判断文件是否已经加载
+        if (!configuration.isResourceLoaded(resource)) {
+            // 加载xml文件，并将mapper接口中的方法与mapper.xml的sql对应存入Configuration对象的mappedStatements属性中
+            loadXmlResource();
+            // 添加解析过的映射，下次判断有就不再解析
+            configuration.addLoadedResource(resource);
+            // 设置命名空间
+            assistant.setCurrentNamespace(type.getName());
+            // 二级缓存的处理，后续解释
+            parseCache();
+            parseCacheRef();
+            // 获取所有方法，遍历解析
+            Method[] methods = type.getMethods();
+            for (Method method : methods) {
+                try {
+                    // issue #237
+                    if (!method.isBridge()) {
+                        // 这里主要是解析方法上的注解sql，并将mapper接口中方法与之对应存入Configuration对象的mappedStatements属性中
+                        // 若既配置xml又配置注解的情况下，注解会覆盖xml，相同的namespace+id（com.wpc.mapper.UserMapper.list）
+                        parseStatement(method);
+                    }
+                } catch (IncompleteElementException e) {
+                    configuration.addIncompleteMethod(new MethodResolver(this, method));
+                }
+            }
+        }
+        parsePendingMethods();
+    }
+    private void loadXmlResource() {
+        // 判断是否加载，防止重复加载
+        if (!configuration.isResourceLoaded("namespace:" + type.getName())) {
+            // 找到相对路径下的xml
+            String xmlResource = type.getName().replace('.', '/') + ".xml";
+            InputStream inputStream = type.getResourceAsStream("/" + xmlResource);
+            if (inputStream == null) {
+                // Search XML mapper that is not in the module but in the classpath.
+                try {
+                    inputStream = Resources.getResourceAsStream(type.getClassLoader(), xmlResource);
+                } catch (IOException e2) {
+                    // ignore, resource is not required
+                }
+            }
+            if (inputStream != null) {
+                XMLMapperBuilder xmlParser = new XMLMapperBuilder(inputStream, assistant.getConfiguration(), xmlResource, configuration.getSqlFragments(), type.getName());
+                // 解析xml文件，下面介绍
+                xmlParser.parse();
+            }
+        }
+    }
+    void parseStatement(Method method) {
+        // 获取方法入参类型
+        Class<?> parameterTypeClass = getParameterType(method);
+        // 获取自定义SQL的解析方式
+        LanguageDriver languageDriver = getLanguageDriver(method);
+        // 获取注解上sql对象
+        SqlSource sqlSource = getSqlSourceFromAnnotations(method, parameterTypeClass, languageDriver);
+        ...
+    }
+}
+2)根据resource或url指定加载mapper
+public class XMLMapperBuilder extends BaseBuilder {
+    // 构造方法（有多个）
+    private XMLMapperBuilder(XPathParser parser, Configuration configuration, String resource, Map<String, XNode> sqlFragments) {
+        super(configuration);
+        // MapperBuilderAssistant用于缓存、sql参数、查询返回的结果集处理。
+        this.builderAssistant = new MapperBuilderAssistant(configuration, resource);
+        // 解析器
+        this.parser = parser;
+        this.sqlFragments = sqlFragments;
+        // 配置中指定的文件名
+        this.resource = resource;
+    }
+    public void parse() {
+        // 判断是否加载，防止重复加载
+        if (!configuration.isResourceLoaded(resource)) {
+            // 解析mapper.xml文件下的mapper标签
+            configurationElement(parser.evalNode("/mapper"));
+            // 添加解析过的映射，下次判断有就不再解析
+            configuration.addLoadedResource(resource);
+            // 绑定Mapper的命名空间
+            bindMapperForNamespace();
+        }
+        parsePendingResultMaps();
+        parsePendingCacheRefs();
+        parsePendingStatements();
+    }
+
+    private void configurationElement(XNode context) {
+        try {
+            String namespace = context.getStringAttribute("namespace");
+            if (namespace == null || namespace.equals("")) {
+                throw new BuilderException("Mapper's namespace cannot be empty");
+            }
+            // 设置命名空间
+            builderAssistant.setCurrentNamespace(namespace);
+            //解析cache-ref节点
+            cacheRefElement(context.evalNode("cache-ref"));
+            //解析cache节点
+            cacheElement(context.evalNode("cache"));
+            //解析parameterMap节点
+            parameterMapElement(context.evalNodes("/mapper/parameterMap"));
+            //解析resultMap节点
+            resultMapElements(context.evalNodes("/mapper/resultMap"));
+            //解析sql节点
+            sqlElement(context.evalNodes("/mapper/sql"));
+            //解析select|insert|update|delete节点
+            buildStatementFromContext(context.evalNodes("select|insert|update|delete"));
+        } catch (Exception e) {
+            throw new BuilderException("Error parsing Mapper XML. The XML location is '" + resource + "'. Cause: " + e, e);
+        }
+    }
+    // 用于获取mapper的代理工厂对象，判断是否knowMappers中是否存在其代理工厂对象
+    private void bindMapperForNamespace() {
+        String namespace = builderAssistant.getCurrentNamespace();
+        if (namespace != null) {
+            Class<?> boundType = null;
+            try {
+                boundType = Resources.classForName(namespace);
+            } catch (ClassNotFoundException e) {
+                //ignore, bound type is not required
+            }
+            if (boundType != null) {
+                if (!configuration.hasMapper(boundType)) {
+                    // Spring may not know the real resource name so we set a flag
+                    // to prevent loading again this resource from the mapper interface
+                    // look at MapperAnnotationBuilder#loadXmlResource
+                    // 添加解析过的映射，下次判断有就不再解析(namespace:com.wpc.mapper.UserMapper)
+                    configuration.addLoadedResource("namespace:" + namespace);
+                    // mapper映射，上面有解释
+                    configuration.addMapper(boundType);
+                }
+            }
+        }
+    }
+}
+3)sqlSession的获取
+public class DefaultSqlSessionFactory implements SqlSessionFactory {
+    private final Configuration configuration;
+
+    public DefaultSqlSessionFactory(Configuration configuration) {
+        this.configuration = configuration;
+    }
+
+    @Override
+    public SqlSession openSession() {
+        return openSessionFromDataSource(configuration.getDefaultExecutorType(), null, false);
+    }
+    private SqlSession openSessionFromDataSource(ExecutorType execType, TransactionIsolationLevel level, boolean autoCommit) {
+        Transaction tx = null;
+        try {
+            // 获取环境配置信息
+            final Environment environment = configuration.getEnvironment();
+            // 获取事务工厂对象，如果没有配置则会默认生成
+            final TransactionFactory transactionFactory = getTransactionFactoryFromEnvironment(environment);
+            // 获取事务对象
+            tx = transactionFactory.newTransaction(environment.getDataSource(), level, autoCommit);
+            // 获取Executor对象，其实是对jdbc中Statement的封装，后续增删改查操作的执行
+            final Executor executor = configuration.newExecutor(tx, execType);
+            // 获取SqlSession对象
+            return new DefaultSqlSession(configuration, executor, autoCommit);
+        } catch (Exception e) {
+            closeTransaction(tx); // may have fetched a connection so lets call close()
+            throw ExceptionFactory.wrapException("Error opening session.  Cause: " + e, e);
+        } finally {
+            ErrorContext.instance().reset();
+        }
+    }
+    // 生成默认的事务工厂
+    private TransactionFactory getTransactionFactoryFromEnvironment(Environment environment) {
+        if (environment == null || environment.getTransactionFactory() == null) {
+            return new ManagedTransactionFactory();
+        }
+        return environment.getTransactionFactory();
+    }
+}
+public class Configuration {
+    public Executor newExecutor(Transaction transaction, ExecutorType executorType) {
+        executorType = executorType == null ? defaultExecutorType : executorType;
+        executorType = executorType == null ? ExecutorType.SIMPLE : executorType;
+        Executor executor;
+        // 根据不同的executorType来创建
+        // 默认的执行器。SIMPLE
+        // 执行器重用 REUSE
+        // 执行器重用语句 批量更新 BATCH
+        if (ExecutorType.BATCH == executorType) {
+          executor = new BatchExecutor(this, transaction);
+        } else if (ExecutorType.REUSE == executorType) {
+          executor = new ReuseExecutor(this, transaction);
+        } else {
+          executor = new SimpleExecutor(this, transaction);
+        }
+        // 判断是否开启二级缓存，后续介绍
+        if (cacheEnabled) {
+          executor = new CachingExecutor(executor);
+        }
+        // 通过责任链模式来生成代理对象
+        executor = (Executor) interceptorChain.pluginAll(executor);
+        return executor;
+    }
+}
+public class DefaultSqlSession implements SqlSession {
+    private final Configuration configuration;
+    // 执行器
+    private final Executor executor;
+
+    // 是否自动提交
+    private final boolean autoCommit;
+    private boolean dirty;
+    // 游标列表
+    private List<Cursor<?>> cursorList;
+
+    public DefaultSqlSession(Configuration configuration, Executor executor, boolean autoCommit) {
+        this.configuration = configuration;
+        this.executor = executor;
+        this.dirty = false;
+        this.autoCommit = autoCommit;
+    }
+}

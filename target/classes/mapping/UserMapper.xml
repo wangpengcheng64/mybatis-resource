@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.wpc.mapper.UserMapper">
+
+    <resultMap id="BaseResultMap" type="com.wpc.bean.User">
+        <result property="id" column="id" jdbcType="BIGINT"></result>
+        <result property="name" column="name" jdbcType="VARCHAR"></result>
+        <result property="age" column="age" jdbcType="INTEGER"></result>
+    </resultMap>
+
+    <select id="list" resultMap="BaseResultMap">
+        select * from t_user
+    </select>
+
+    <select id="query" resultMap="BaseResultMap">
+        select * from t_user where id = #{id}
+    </select>
+
+    <update id="update">
+        update t_user name = #{name},age = #{age} where id = #{id}
+    </update>
+
+    <delete id="delete">
+        delete from t_user where id = #{id}
+    </delete>
+
+    <insert id="insert">
+        insert into t_user (name,age) values (#{name}, #{age})
+    </insert>
+</mapper>
