@@ -40,7 +40,6 @@ public class MapperProxyFactory<T> {
         final MapperProxy<T> mapperProxy = new MapperProxy<>(sqlSession, mapperInterface, methodCache);
         return newInstance(mapperProxy);
     }
-
 }
 
 public class MapperProxy<T> implements InvocationHandler, Serializable {
@@ -48,6 +47,7 @@ public class MapperProxy<T> implements InvocationHandler, Serializable {
     private final Class<T> mapperInterface;
     private final Map<Method, MapperMethod> methodCache;
 
+    // 有参构造，属性赋值
     public MapperProxy(SqlSession sqlSession, Class<T> mapperInterface, Map<Method, MapperMethod> methodCache) {
         this.sqlSession = sqlSession;
         this.mapperInterface = mapperInterface;
@@ -60,37 +60,26 @@ public class MapperProxy<T> implements InvocationHandler, Serializable {
             // 如果是Object的方法则直接执行，不进行代理
             if (Object.class.equals(method.getDeclaringClass())) {
                 return method.invoke(this, args);
-            // 既不是静态方法也不是接口方法
+            // 判断是否jdk8的默认实现方法
             } else if (isDefaultMethod(method)) {
                 return invokeDefaultMethod(proxy, method, args);
             }
         } catch (Throwable t) {
             throw ExceptionUtil.unwrapThrowable(t);
         }
+        // 获取MapperMethod对象
         final MapperMethod mapperMethod = cachedMapperMethod(method);
         // mapper接口方法的执行，即增删改查
         return mapperMethod.execute(sqlSession, args);
     }
 
     private MapperMethod cachedMapperMethod(Method method) {
+        // 将method做为key从methodCache容器中取，如果有则返回，没有则创建存入methodCache并返回
         return methodCache.computeIfAbsent(method, k -> new MapperMethod(mapperInterface, method, sqlSession.getConfiguration()));
     }
 
-    private Object invokeDefaultMethod(Object proxy, Method method, Object[] args)
-            throws Throwable {
-        final Constructor<MethodHandles.Lookup> constructor = MethodHandles.Lookup.class
-                .getDeclaredConstructor(Class.class, int.class);
-        if (!constructor.isAccessible()) {
-            constructor.setAccessible(true);
-        }
-        final Class<?> declaringClass = method.getDeclaringClass();
-        return constructor
-                .newInstance(declaringClass,
-                        MethodHandles.Lookup.PRIVATE | MethodHandles.Lookup.PROTECTED
-                                | MethodHandles.Lookup.PACKAGE | MethodHandles.Lookup.PUBLIC)
-                .unreflectSpecial(method, declaringClass).bindTo(proxy).invokeWithArguments(args);
-    }
-
+    // method.getModifiers() & Modifier.PUBLIC 的值 (0x00000001) 不为 0，则说明有 public 修饰符
+    // 判断既是abstract，或者是static的public方法（也就是jdk8的默认实现方法） ，且是接口
     private boolean isDefaultMethod(Method method) {
         return (method.getModifiers()
                 & (Modifier.ABSTRACT | Modifier.PUBLIC | Modifier.STATIC)) == Modifier.PUBLIC
@@ -98,7 +87,68 @@ public class MapperProxy<T> implements InvocationHandler, Serializable {
     }
 }
 
+//https://www.cnblogs.com/zsg88/p/7552600.html
+//https://blog.csdn.net/niunai112/article/details/80247901
+public class MapperMethod {
 
+    private final SqlCommand command;
+    private final MethodSignature method;
+
+    public MapperMethod(Class<?> mapperInterface, Method method, Configuration config) {
+        this.command = new SqlCommand(config, mapperInterface, method);
+        this.method = new MethodSignature(config, mapperInterface, method);
+    }
+
+    public Object execute(SqlSession sqlSession, Object[] args) {
+        Object result;
+        switch (command.getType()) {
+            case INSERT: {
+                Object param = method.convertArgsToSqlCommandParam(args);
+                result = rowCountResult(sqlSession.insert(command.getName(), param));
+                break;
+            }
+            case UPDATE: {
+                Object param = method.convertArgsToSqlCommandParam(args);
+                result = rowCountResult(sqlSession.update(command.getName(), param));
+                break;
+            }
+            case DELETE: {
+                Object param = method.convertArgsToSqlCommandParam(args);
+                result = rowCountResult(sqlSession.delete(command.getName(), param));
+                break;
+            }
+            case SELECT:
+                if (method.returnsVoid() && method.hasResultHandler()) {
+                    executeWithResultHandler(sqlSession, args);
+                    result = null;
+                } else if (method.returnsMany()) {
+                    result = executeForMany(sqlSession, args);
+                } else if (method.returnsMap()) {
+                    result = executeForMap(sqlSession, args);
+                } else if (method.returnsCursor()) {
+                    result = executeForCursor(sqlSession, args);
+                } else {
+                    Object param = method.convertArgsToSqlCommandParam(args);
+                    result = sqlSession.selectOne(command.getName(), param);
+                    if (method.returnsOptional() &&
+                            (result == null || !method.getReturnType().equals(result.getClass()))) {
+                        result = Optional.ofNullable(result);
+                    }
+                }
+                break;
+            case FLUSH:
+                result = sqlSession.flushStatements();
+                break;
+            default:
+                throw new BindingException("Unknown execution method for: " + command.getName());
+        }
+        if (result == null && method.getReturnType().isPrimitive() && !method.returnsVoid()) {
+            throw new BindingException("Mapper method '" + command.getName()
+                    + " attempted to return null from a method with a primitive return type (" + method.getReturnType() + ").");
+        }
+        return result;
+    }
+}
 
 
 
