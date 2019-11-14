@@ -170,7 +170,7 @@ public class XMLMapperBuilder extends BaseBuilder {
             resultMapElements(context.evalNodes("/mapper/resultMap"));
             //解析sql节点
             sqlElement(context.evalNodes("/mapper/sql"));
-            //解析select|insert|update|delete节点
+            //解析select|insert|update|delete节点，并构建对应的MappedStatement对象
             buildStatementFromContext(context.evalNodes("select|insert|update|delete"));
         } catch (Exception e) {
             throw new BuilderException("Error parsing Mapper XML. The XML location is '" + resource + "'. Cause: " + e, e);
@@ -245,7 +245,7 @@ public class Configuration {
         executorType = executorType == null ? defaultExecutorType : executorType;
         executorType = executorType == null ? ExecutorType.SIMPLE : executorType;
         Executor executor;
-        // 根据不同的executorType来创建
+        // 根据不同的executorType来创建（配置文件中设置）
         // 默认的执行器。SIMPLE
         // 执行器重用 REUSE
         // 执行器重用语句 批量更新 BATCH

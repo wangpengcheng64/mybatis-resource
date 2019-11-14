@@ -11,6 +11,17 @@
         <property name="password" value="123456"/>
     </properties> -->
 
+    <!-- 指定执行器类型：SimpleExecutor、ReuseExecutor和BatchExecutor -->
+    <settings>
+        <!--默认的执行器。SIMPLE-->
+        <!--执行器重用 REUSE-->
+        <!--执行器重用语句 批量更新 BATCH-->
+        <setting name="defaultExecutorType" value="SIMPLE"/>
+        <!-- 首先二级缓存默认是开启的-->
+        <!-- 其次需要在 UserMapper.xml 文件中开启缓存，配置了这个才生效 <cache></cache> -->
+        <setting name="cacheEnabled" value="true"/>
+    </settings>
+
     <!-- 为JAVA Bean起类别名 -->
     <typeAliases>
         <!-- 别名方式1，一个一个的配置 type中放置的是类的全路径，alias中放置的是类别名

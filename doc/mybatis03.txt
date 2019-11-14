@@ -1,0 +1,281 @@
+3，通过sqlSession获取mapper接口实例（动态代理）
+public class DefaultSqlSession implements SqlSession {
+    @Override
+    public <T> T getMapper(Class<T> type) {
+        return configuration.<T>getMapper(type, this);
+    }
+}
+public class Configuration {
+    public <T> T getMapper(Class<T> type, SqlSession sqlSession) {
+        return mapperRegistry.getMapper(type, sqlSession);
+    }
+}
+public class MapperRegistry {
+    public <T> T getMapper(Class<T> type, SqlSession sqlSession) {
+        // 获取mapper代理工厂，在解析mapper接口及mapper.xml文件时生成的
+        final MapperProxyFactory<T> mapperProxyFactory = (MapperProxyFactory<T>) knownMappers.get(type);
+        if (mapperProxyFactory == null) {
+            throw new BindingException("Type " + type + " is not known to the MapperRegistry.");
+        }
+        try {
+            // 重点，获取实例
+            return mapperProxyFactory.newInstance(sqlSession);
+        } catch (Exception e) {
+            throw new BindingException("Error getting mapper instance. Cause: " + e, e);
+        }
+    }
+}
+public class MapperProxyFactory<T> {
+    private final Class<T> mapperInterface;
+    private final Map<Method, MapperMethod> methodCache = new ConcurrentHashMap<>();
+
+    @SuppressWarnings("unchecked")
+    protected T newInstance(MapperProxy<T> mapperProxy) {
+        // jdk动态代理
+        return (T) Proxy.newProxyInstance(mapperInterface.getClassLoader(), new Class[] { mapperInterface }, mapperProxy);
+    }
+
+    public T newInstance(SqlSession sqlSession) {
+        // 生成代理类
+        final MapperProxy<T> mapperProxy = new MapperProxy<>(sqlSession, mapperInterface, methodCache);
+        return newInstance(mapperProxy);
+    }
+}
+
+public class MapperProxy<T> implements InvocationHandler, Serializable {
+    private final SqlSession sqlSession;
+    private final Class<T> mapperInterface;
+    private final Map<Method, MapperMethod> methodCache;
+
+    // 有参构造，属性赋值
+    public MapperProxy(SqlSession sqlSession, Class<T> mapperInterface, Map<Method, MapperMethod> methodCache) {
+        this.sqlSession = sqlSession;
+        this.mapperInterface = mapperInterface;
+        this.methodCache = methodCache;
+    }
+
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        try {
+            // 如果是Object的方法则直接执行，不进行代理
+            if (Object.class.equals(method.getDeclaringClass())) {
+                return method.invoke(this, args);
+            // 判断是否jdk8的默认实现方法
+            } else if (isDefaultMethod(method)) {
+                return invokeDefaultMethod(proxy, method, args);
+            }
+        } catch (Throwable t) {
+            throw ExceptionUtil.unwrapThrowable(t);
+        }
+        // 获取MapperMethod对象
+        final MapperMethod mapperMethod = cachedMapperMethod(method);
+        // mapper接口方法的执行，即增删改查
+        return mapperMethod.execute(sqlSession, args);
+    }
+
+    private MapperMethod cachedMapperMethod(Method method) {
+        // 将method做为key从methodCache容器中取，如果有则返回，没有则创建存入methodCache并返回
+        return methodCache.computeIfAbsent(method, k -> new MapperMethod(mapperInterface, method, sqlSession.getConfiguration()));
+    }
+
+    // method.getModifiers() & Modifier.PUBLIC 的值 (0x00000001) 不为 0，则说明有public修饰符
+    // 判断既是abstract，或者是static的public方法（也就是jdk8的默认实现方法） ，且是接口
+    private boolean isDefaultMethod(Method method) {
+        return (method.getModifiers()
+                & (Modifier.ABSTRACT | Modifier.PUBLIC | Modifier.STATIC)) == Modifier.PUBLIC
+                && method.getDeclaringClass().isInterface();
+    }
+}
+
+public class MapperMethod {
+    // sql查询类型及方法名
+    private final SqlCommand command;
+    // 方法签名，封装了方法返回值/请求参数等信息
+    private final MethodSignature method;
+
+    public MapperMethod(Class<?> mapperInterface, Method method, Configuration config) {
+        this.command = new SqlCommand(config, mapperInterface, method);
+        this.method = new MethodSignature(config, mapperInterface, method);
+    }
+    // 增删改查方法执行（下节解析）
+    public Object execute(SqlSession sqlSession, Object[] args) {
+        ...
+    }
+
+    // sql查询类型及方法名
+    public static class SqlCommand {
+        // 方法全限定名称：com.wpc.mapper.UserMapper.query
+        private final String name;
+        // sql查询类型：UNKNOWN, INSERT, UPDATE, DELETE, SELECT, FLUSH;
+        private final SqlCommandType type;
+
+        // 构造方法
+        public SqlCommand(Configuration configuration, Class<?> mapperInterface, Method method) {
+            // 执行的方法名：query
+            final String methodName = method.getName();
+            final Class<?> declaringClass = method.getDeclaringClass();
+            // 获取对应的MappedStatement对象
+            MappedStatement ms = resolveMappedStatement(mapperInterface, methodName, declaringClass,
+                    configuration);
+            if (ms == null) {
+                if(method.getAnnotation(Flush.class) != null){
+                    name = null;
+                    type = SqlCommandType.FLUSH;
+                } else {
+                    throw new BindingException("Invalid bound statement (not found): "
+                            + mapperInterface.getName() + "." + methodName);
+                }
+            } else {
+                // mapper.xml文件中对应的sql语句id属性 com.wpc.mapper.UserMapper.query
+                name = ms.getId();
+                // sql查询类型
+                type = ms.getSqlCommandType();
+                // 未知抛出异常
+                if (type == SqlCommandType.UNKNOWN) {
+                    throw new BindingException("Unknown execution method for: " + name);
+                }
+            }
+        }
+
+        private MappedStatement resolveMappedStatement(Class<?> mapperInterface, String methodName,
+                                                       Class<?> declaringClass, Configuration configuration) {
+            // 获取方法全限定名称
+            String statementId = mapperInterface.getName() + "." + methodName;
+            // 判断configuration对象中是否有该方法的MappedStatement对象（加载xml文件时保存的），有则获取返回
+            if (configuration.hasStatement(statementId)) {
+                return configuration.getMappedStatement(statementId);
+            } else if (mapperInterface.equals(declaringClass)) {
+                return null;
+            }
+            // 没有则向上获取父类方法全限定名称对应的MappedStatement对象
+            for (Class<?> superInterface : mapperInterface.getInterfaces()) {
+                if (declaringClass.isAssignableFrom(superInterface)) {
+                    MappedStatement ms = resolveMappedStatement(superInterface, methodName,
+                            declaringClass, configuration);
+                    if (ms != null) {
+                        return ms;
+                    }
+                }
+            }
+            return null;
+        }
+    }
+    // 方法签名，封装了方法返回值/请求参数等信息
+    public static class MethodSignature {
+        private final boolean returnsMany;  // 返回值是否为集合或者数组
+        private final boolean returnsMap;   // 返回值是否为map类型
+        private final boolean returnsVoid;  // 返回值是否为void类型
+        private final boolean returnsCursor;    // 返回值是否为游标类型
+        private final boolean returnsOptional;  // 返回值是否为Optional类型
+        private final Class<?> returnType;  // 返回值类型
+        private final String mapKey;        // MapKey注解value值
+        private final Integer resultHandlerIndex;   // ResultHandler返回值的索引位置
+        private final Integer rowBoundsIndex;   // RowBounds返回值的索引位置
+        private final ParamNameResolver paramNameResolver;
+
+        public MethodSignature(Configuration configuration, Class<?> mapperInterface, Method method) {
+            Type resolvedReturnType = TypeParameterResolver.resolveReturnType(method, mapperInterface);
+            if (resolvedReturnType instanceof Class<?>) { // 返回值对象是否为类的实例
+                this.returnType = (Class<?>) resolvedReturnType;
+            } else if (resolvedReturnType instanceof ParameterizedType) { // 类是泛型类时，比如List,Map等
+                this.returnType = (Class<?>) ((ParameterizedType) resolvedReturnType).getRawType();
+            } else {
+                this.returnType = method.getReturnType();
+            }
+            this.returnsVoid = void.class.equals(this.returnType);
+            this.returnsMany = configuration.getObjectFactory().isCollection(this.returnType) || this.returnType.isArray();
+            this.returnsCursor = Cursor.class.equals(this.returnType);
+            this.returnsOptional = Optional.class.equals(this.returnType);
+            this.mapKey = getMapKey(method);
+            this.returnsMap = this.mapKey != null;
+            this.rowBoundsIndex = getUniqueParamIndex(method, RowBounds.class);
+            this.resultHandlerIndex = getUniqueParamIndex(method, ResultHandler.class);
+            // 参数解析，下面有解释
+            this.paramNameResolver = new ParamNameResolver(configuration, method);
+        }
+
+        public Object convertArgsToSqlCommandParam(Object[] args) {
+            return paramNameResolver.getNamedParams(args);
+        }
+
+        // 获取参数的索引位置
+        private Integer getUniqueParamIndex(Method method, Class<?> paramType) {
+            Integer index = null;
+            // 获取方法参数类型列表
+            final Class<?>[] argTypes = method.getParameterTypes();
+            for (int i = 0; i < argTypes.length; i++) {
+                // paramType是否是argTypes[i]的父类
+                if (paramType.isAssignableFrom(argTypes[i])) {
+                    if (index == null) {
+                        index = i;
+                    } else {
+                        // 不能同时存在多个同类型的
+                        throw new BindingException(method.getName() + " cannot have multiple " + paramType.getSimpleName() + " parameters");
+                    }
+                }
+            }
+            return index;
+        }
+
+        private String getMapKey(Method method) {
+            String mapKey = null;
+            // 返回值类型是否为map
+            if (Map.class.isAssignableFrom(method.getReturnType())) {
+                // 获取注解：@MapKey("id")，具体可以去查下MapKey注解的使用
+                final MapKey mapKeyAnnotation = method.getAnnotation(MapKey.class);
+                if (mapKeyAnnotation != null) {
+                    // 获取注解值
+                    mapKey = mapKeyAnnotation.value();
+                }
+            }
+            return mapKey;
+        }
+    }
+}
+// 参数名解析
+public class ParamNameResolver {
+    public ParamNameResolver(Configuration config, Method method) {
+        // 获取method中的所有参数类型
+        final Class<?>[] paramTypes = method.getParameterTypes();
+        // 获取参数中含有的注解，主要是为了@Param注解做准备
+        final Annotation[][] paramAnnotations = method.getParameterAnnotations();
+        final SortedMap<Integer, String> map = new TreeMap<>();
+        // 这里实际上获取的值就是参数的个数。也就是二维数组的行长度
+        int paramCount = paramAnnotations.length;
+        // get names from @Param annotations
+        for (int paramIndex = 0; paramIndex < paramCount; paramIndex++) {
+            // 排除RowBounds和ResultHandler两种类型的参数
+            if (isSpecialParameter(paramTypes[paramIndex])) {
+                // skip special parameters
+                continue;
+            }
+            String name = null;
+            // 如果参数中含有@Param注解，则只用@Param注解的值作为参数名
+            for (Annotation annotation : paramAnnotations[paramIndex]) {
+                if (annotation instanceof Param) {
+                    hasParamAnnotation = true;
+                    name = ((Param) annotation).value();
+                    break;
+                }
+            }
+            // 即参数没有@Param注解
+            if (name == null) {
+                // 参数实际名称，其实这个值默认就是true，具体可以查看Configuration类中的该属性值，当然也可以在配置文件进行配置关闭
+                // 如果jdk处于1.8版本，且编译时带上了-parameters 参数，那么获取的就是实际的参数名，如methodA(String username)
+                // 获取的就是username,否则获取的就是args0  后面的数字就是参数所在位置
+                if (config.isUseActualParamName()) {
+                    name = getActualParamName(method, paramIndex);
+                }
+                // 如果以上条件都不满足，则将参数名配置为 0,1,2../
+                if (name == null) {
+                    // use the parameter index as the name ("0", "1", ...)
+                    // gcode issue #71
+                    name = String.valueOf(map.size());
+                }
+            }
+            // 参数位置：参数名
+            map.put(paramIndex, name);
+        }
+        names = Collections.unmodifiableSortedMap(map);
+    }
+}

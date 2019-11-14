@@ -18,9 +18,9 @@ public class UserTest {
         SqlSessionFactory sqlSessionFactory = new SqlSessionFactoryBuilder().build(inputStream);
         SqlSession sqlSession = sqlSessionFactory.openSession();
         UserMapper mapper = sqlSession.getMapper(UserMapper.class);
-        query(mapper);
+//        query(mapper);
 //        list(mapper);
-//        update(mapper);
+        update(mapper);
 //        query(mapper);
 //        insert(mapper);
 //        delete(mapper);
