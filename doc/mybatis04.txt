@@ -58,7 +58,6 @@ public class MapperMethod {
         }
         return result;
     }
-
     // 增删改操作影响的行数
     private Object rowCountResult(int rowCount) {
         final Object result;
@@ -136,7 +135,6 @@ public class MapperMethod {
         metaObject.addAll(list);
         return collection;
     }
-    //
     @SuppressWarnings("unchecked")
     private <E> Object convertToArray(List<E> list) {
         // 获取数组的class对象类型
@@ -204,6 +202,8 @@ public class ParamNameResolver {
         }
     }
 }
+// 查询方法最终都是调用Executor的query方法
+// 增删改都是调用Executor的update方法
 public class DefaultSqlSession implements SqlSession {
     @Override
     public int insert(String statement, Object parameter) {
@@ -242,7 +242,7 @@ public class Configuration { // 第二节有介绍
         } else {
             executor = new SimpleExecutor(this, transaction);
         }
-        // 判断是否开启二级缓存，所以最终返回的是CachingExecutor对象
+        // 判断是否开启二级缓存，二级缓存默认是开启的，所以最终返回的是CachingExecutor对象
         if (cacheEnabled) {
             // 将上面获取的执行器传入
             executor = new CachingExecutor(executor);
