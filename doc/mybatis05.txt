@@ -1,5 +1,13 @@
-5,执行器之Executor介绍
-Executor分成两大类，一是CacheExecutor，二是普通Executor（SimpleExecutor，ReuseExecutor，BatchExecutor，都继承BaseExecutor）。
+5,执行器之Executor介绍及一二级缓存的实现
+Executor：执行器，执行数据库相关操作
+    |--CachingExecutor：BaseExecutor子类的包装类，处理二级缓存
+    |--BaseExecutor：抽象类，主要提供了缓存管理和事务管理的能力，其他子类需要实现的抽象方法为：doUpdate、doQuery等方法。
+        |--SimpleExecutor：默认配置，使用PrepareStatement对象访问数据库，每次访问都要创建新的PrepareStatement对象
+        |--ReuseExecutor：使用预编译PrepareStatement对象访问数据库，访问时，会重用缓存中的statement对象
+        |--BatchExecutor：实现批量执行多条SQL语句的能力
+缓存：在select标签中设置useCache=false，可以禁用当前select语句的二级缓存，即每次查询都是去数据库中查询，默认情况下是true，即该statement使用二级缓存。
+    一级缓存：SqlSession级别的缓存。在操作数据库时需要构造 sqlSession对象，在对象中有一个数据结构（HashMap）用于存储缓存数据。不同的sqlSession之间的缓存数据区域（HashMap）是互相不影响的。
+    二级缓存：Mapper（namespace）级别的缓存。多个SqlSession去操作同一个Mapper的sql语句，多个SqlSession可以共用二级缓存，二级缓存是跨SqlSession的。
 public class CachingExecutor implements Executor {
     // 初始化时保存的普通Executor（默认为SimpleExecutor）
     private final Executor delegate;
@@ -254,5 +262,4 @@ public abstract class BaseExecutor implements Executor {
             return connection;
         }
     }
-
 }

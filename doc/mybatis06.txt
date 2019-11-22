@@ -1,69 +1,244 @@
-5，StatementHandler及ResultSetHandler介绍（mapper如何将数据库数据转换成java对象的）
+6，StatementHandler解析
+StatementHandler：创建statement对象，为sql语句绑定参数，执行增删改查等SQL语句，将结果集映射进行转化
+    |--RoutingStatementHandler：使用静态代理模式，实例化BaseStatementHandler子类
+    |--BaseStatementHandler：抽象父类，定义了初始化statement的操作顺序
+        |--SimpleStatementHandler：使用statement对象访问数据库，无须参数化
+        |--PreparedStatementHandler：使用预编译PreparedStatement对象访问数据库
+        |--CallableStatementHandler：用于调用存储过程
 
+public class RoutingStatementHandler implements StatementHandler {
+    // BaseStatementHandler具体子类
+    private final StatementHandler delegate;
+    // 实例化BaseStatementHandler子类
+    public RoutingStatementHandler(Executor executor, MappedStatement ms, Object parameter, RowBounds rowBounds, ResultHandler resultHandler, BoundSql boundSql) {
+        // mapper.xml文件中sql配置statementType，默认值：PREPARED
+        switch (ms.getStatementType()) {
+            case STATEMENT:
+                delegate = new SimpleStatementHandler(executor, ms, parameter, rowBounds, resultHandler, boundSql);
+                break;
+            case PREPARED:
+                delegate = new PreparedStatementHandler(executor, ms, parameter, rowBounds, resultHandler, boundSql);
+                break;
+            case CALLABLE:
+                delegate = new CallableStatementHandler(executor, ms, parameter, rowBounds, resultHandler, boundSql);
+                break;
+            default:
+                throw new ExecutorException("Unknown statement type: " + ms.getStatementType());
+        }
+    }
+}
 
+public abstract class BaseStatementHandler implements StatementHandler {
+    protected final Configuration configuration; // 全局配置类
+    protected final ObjectFactory objectFactory; // 对象工厂
+    protected final TypeHandlerRegistry typeHandlerRegistry; // 类型处理器注册器
+    protected final ResultSetHandler resultSetHandler; // 结果集处理器
+    protected final ParameterHandler parameterHandler; // 参数处理器
+    protected final Executor executor; // 执行器
+    protected final MappedStatement mappedStatement; // mapper中sql映射对象
+    protected final RowBounds rowBounds; // 分页参数
+    protected BoundSql boundSql; // sql绑定对象
+    // 构造方法，属性赋值
+    protected BaseStatementHandler(Executor executor, MappedStatement mappedStatement, Object parameterObject, RowBounds rowBounds, ResultHandler resultHandler, BoundSql boundSql) {
+        this.configuration = mappedStatement.getConfiguration();
+        this.executor = executor;
+        this.mappedStatement = mappedStatement;
+        this.rowBounds = rowBounds;
+        this.typeHandlerRegistry = configuration.getTypeHandlerRegistry();
+        this.objectFactory = configuration.getObjectFactory();
+        if (boundSql == null) { // issue #435, get the key before calculating the statement
+            generateKeys(parameterObject);
+            boundSql = mappedStatement.getBoundSql(parameterObject);
+        }
+        this.boundSql = boundSql;
+        // 创建参数处理器对象，后面解析
+        this.parameterHandler = configuration.newParameterHandler(mappedStatement, parameterObject, boundSql);
+        // 创建结果集处理器对象，后面解析
+        this.resultSetHandler = configuration.newResultSetHandler(executor, mappedStatement, rowBounds, parameterHandler, resultHandler, boundSql);
+    }
+    // sql语句预编译
+    @Override
+    public Statement prepare(Connection connection, Integer transactionTimeout) throws SQLException {
+        ErrorContext.instance().sql(boundSql.getSql());
+        Statement statement = null;
+        try {
+            statement = instantiateStatement(connection);
+            setStatementTimeout(statement, transactionTimeout);
+            setFetchSize(statement);
+            return statement;
+        } catch (SQLException e) {
+            closeStatement(statement);
+            throw e;
+        } catch (Exception e) {
+            closeStatement(statement);
+            throw new ExecutorException("Error preparing statement.  Cause: " + e, e);
+        }
+    }
+    // 抽象方法，获取Statement对象，子类实现
+    protected abstract Statement instantiateStatement(Connection connection) throws SQLException;
+    // 给Statement对象设置查询超时时间
+    protected void setStatementTimeout(Statement stmt, Integer transactionTimeout) throws SQLException {
+        Integer queryTimeout = null;
+        if (mappedStatement.getTimeout() != null) {
+            // 在UserMapper.xml中设置的
+            queryTimeout = mappedStatement.getTimeout();
+        } else if (configuration.getDefaultStatementTimeout() != null) {
+            // 在mybatis.xml的settings标签里配置的
+            queryTimeout = configuration.getDefaultStatementTimeout();
+        }
+        if (queryTimeout != null) {
+            stmt.setQueryTimeout(queryTimeout);
+        }
+        StatementUtil.applyTransactionTimeout(stmt, queryTimeout, transactionTimeout);
+    }
+    // 给Statement对象设置FetchSize
+    protected void setFetchSize(Statement stmt) throws SQLException {
+        Integer fetchSize = mappedStatement.getFetchSize();
+        if (fetchSize != null) {
+            // 在UserMapper.xml中设置的
+            stmt.setFetchSize(fetchSize);
+            return;
+        }
+        // 在mybatis.xml的settings标签里配置的
+        Integer defaultFetchSize = configuration.getDefaultFetchSize();
+        if (defaultFetchSize != null) {
+            stmt.setFetchSize(defaultFetchSize);
+        }
+    }
+    //  关闭Statement对象
+    protected void closeStatement(Statement statement) {
+        try {
+            if (statement != null) {
+                statement.close();
+            }
+        } catch (SQLException e) {
+            //ignore
+        }
+    }
+    // 根据参数对象生成主键，mapper.xml文件中sql配置useGeneratedKeys，默认值：默认值false
+    protected void generateKeys(Object parameter) {
+        KeyGenerator keyGenerator = mappedStatement.getKeyGenerator();
+        ErrorContext.instance().store();
+        // 生成主键之前处理逻辑（返回主键id）
+        keyGenerator.processBefore(executor, mappedStatement, null, parameter);
+        ErrorContext.instance().recall();
+    }
+}
 
+public class PreparedStatementHandler extends BaseStatementHandler {
+    public PreparedStatementHandler(Executor executor, MappedStatement mappedStatement, Object parameter, RowBounds rowBounds, ResultHandler resultHandler, BoundSql boundSql) {
+        // 执行父类构造方法
+        super(executor, mappedStatement, parameter, rowBounds, resultHandler, boundSql);
+    }
+    // update操作
+    @Override
+    public int update(Statement statement) throws SQLException {
+        PreparedStatement ps = (PreparedStatement) statement;
+        ps.execute();
+        int rows = ps.getUpdateCount();
+        Object parameterObject = boundSql.getParameterObject();
+        // 获取主键生成器，执行生成主键的操作
+        KeyGenerator keyGenerator = mappedStatement.getKeyGenerator();
+        // 插入数据要自动生成主键的
+        keyGenerator.processAfter(executor, mappedStatement, ps, parameterObject);
+        // 返回影响行数
+        return rows;
+    }
+    // 批量处理
+    @Override
+    public void batch(Statement statement) throws SQLException {
+        PreparedStatement ps = (PreparedStatement) statement;
+        ps.addBatch();
+    }
+    // 查询操作
+    @Override
+    public <E> List<E> query(Statement statement, ResultHandler resultHandler) throws SQLException {
+        PreparedStatement ps = (PreparedStatement) statement;
+        ps.execute();
+        // resultSetHandler解析结果并返回，下节解析
+        return resultSetHandler.handleResultSets(ps);
+    }
+    // 初始化Statement对象
+    @Override
+    protected Statement instantiateStatement(Connection connection) throws SQLException {
+        String sql = boundSql.getSql();
+        if (mappedStatement.getKeyGenerator() instanceof Jdbc3KeyGenerator) {
+            // UserMapper.xml配置文件中sql语句上配置keyColumnName属性，用于指定数据库table中的主键
+            String[] keyColumnNames = mappedStatement.getKeyColumns();
+            // 数据库表中指定了，可以省略keyColumnName配置
+            if (keyColumnNames == null) {
+                return connection.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS);
+            } else {
+                return connection.prepareStatement(sql, keyColumnNames);
+            }
+        // UserMapper.xml配置文件中sql语句上配置resultSetType属性
+        } else if (mappedStatement.getResultSetType() == ResultSetType.DEFAULT) {
+            return connection.prepareStatement(sql);
+        } else {
+            return connection.prepareStatement(sql, mappedStatement.getResultSetType().getValue(), ResultSet.CONCUR_READ_ONLY);
+        }
+    }
+    // sql占位符处理，对预编译的SQL语句进行参数设置
+    // 执行之前sql：update t_user set name = ?, age = ? where id = ?
+    // 执行之后sql：update t_user set name = 'zl',age = 21 where id = 3
+    @Override
+    public void parameterize(Statement statement) throws SQLException {
+        parameterHandler.setParameters((PreparedStatement) statement);
+    }
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-6，拦截器（Interceptor）的实现原理及自定义拦截器
-
-
-
-
-
-
-
-
-
-
-
-
-
-7，一级缓存和二级缓存的实现
-一级缓存是SqlSession级别的缓存。在操作数据库时需要构造 sqlSession对象，在对象中有一个数据结构（HashMap）用于存储缓存数据。不同的sqlSession之间的缓存数据区域（HashMap）是互相不影响的。
-二级缓存是Mapper（namespace）级别的缓存。多个SqlSession去操作同一个Mapper的sql语句，多个SqlSession可以共用二级缓存，二级缓存是跨SqlSession的。
-在select标签中设置useCache=false，可以禁用当前select语句的二级缓存，即每次查询都是去数据库中查询，默认情况下是true，即该statement使用二级缓存。
-
-
-
-
-
-
-
-
-
-
-
-8，事务管理机制
+public class SimpleStatementHandler extends BaseStatementHandler {
+    public SimpleStatementHandler(Executor executor, MappedStatement mappedStatement, Object parameter, RowBounds rowBounds, ResultHandler resultHandler, BoundSql boundSql) {
+        // 执行父类构造方法
+        super(executor, mappedStatement, parameter, rowBounds, resultHandler, boundSql);
+    }
+    // update操作
+    @Override
+    public int update(Statement statement) throws SQLException {
+        String sql = boundSql.getSql();
+        Object parameterObject = boundSql.getParameterObject();
+        KeyGenerator keyGenerator = mappedStatement.getKeyGenerator();
+        int rows;
+        // 执行的都是statement的getUpdateCount方法
+        if (keyGenerator instanceof Jdbc3KeyGenerator) {
+            statement.execute(sql, Statement.RETURN_GENERATED_KEYS);
+            rows = statement.getUpdateCount();
+            keyGenerator.processAfter(executor, mappedStatement, statement, parameterObject);
+        } else if (keyGenerator instanceof SelectKeyGenerator) {
+            statement.execute(sql);
+            rows = statement.getUpdateCount();
+            keyGenerator.processAfter(executor, mappedStatement, statement, parameterObject);
+        } else {
+            statement.execute(sql);
+            rows = statement.getUpdateCount();
+        }
+        return rows;
+    }
+    // 批量处理
+    @Override
+    public void batch(Statement statement) throws SQLException {
+        String sql = boundSql.getSql();
+        statement.addBatch(sql);
+    }
+    // 查询操作
+    @Override
+    public <E> List<E> query(Statement statement, ResultHandler resultHandler) throws SQLException {
+        String sql = boundSql.getSql();
+        statement.execute(sql);
+        return resultSetHandler.handleResultSets(statement);
+    }
+    // 初始化Statement对象
+    @Override
+    protected Statement instantiateStatement(Connection connection) throws SQLException {
+        if (mappedStatement.getResultSetType() == ResultSetType.DEFAULT) {
+            return connection.createStatement();
+        } else {
+            return connection.createStatement(mappedStatement.getResultSetType().getValue(), ResultSet.CONCUR_READ_ONLY);
+        }
+    }
+    // SimpleStatementHandler无须参数化，所有不做处理
+    @Override
+    public void parameterize(Statement statement) {
+        // N/A
+    }
+}

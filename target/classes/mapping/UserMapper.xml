@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.wpc.mapper.UserMapper">
+    <!--开启本mapper的namespace下的二级缓存-->
+    <!--
+        1. eviction:代表的是缓存回收策略，目前MyBatis提供以下策略。
+            (1) LRU,最近最少使用的，一处最长时间不用的对象
+            (2) FIFO,先进先出，按对象进入缓存的顺序来移除他们
+            (3) SOFT,软引用，移除基于垃圾回收器状态和软引用规则的对象
+            (4) WEAK,弱引用，更积极的移除基于垃圾收集器状态和弱引用规则的对象。这里采用的是LRU，移除最长时间不用的对形象
+        2. flushInterval:刷新间隔时间，单位为毫秒，这里配置的是100秒刷新，如果你不配置它，那么当SQL被执行的时候才会去刷新缓存。
+        3. size:引用数目，一个正整数，代表缓存最多可以存储多少个对象，不宜设置过大。设置过大会导致内存溢出。这里配置的是1024个对象
+        4. readOnly:只读，意味着缓存数据只能读取而不能修改，这样设置的好处是我们可以快速读取缓存，缺点是我们没有办法修改缓存，他的默认值是false，不允许我们修改
+    -->
+    <!--<cache eviction="LRU" flushInterval="100000" readOnly="true" size="1024"/>-->
 
     <resultMap id="BaseResultMap" type="com.wpc.bean.User">
         <result property="id" column="id" jdbcType="BIGINT"></result>
@@ -8,23 +20,73 @@
         <result property="age" column="age" jdbcType="INTEGER"></result>
     </resultMap>
 
-    <select id="list" resultMap="BaseResultMap">
-        select * from t_user
+    <!--
+     1. id （必须配置）
+        id是命名空间中的唯一标识符，可被用来代表这条语句。 一个命名空间（namespace） 对应一个dao接口,
+        这个id也应该对应dao里面的某个方法（相当于方法的实现），因此id 应该与方法名一致
+     2. parameterType （可选配置, 默认为mybatis自动选择处理）
+        将要传入语句的参数的完全限定类名或别名， 如果不配置，mybatis会通过ParameterHandler 根据参数类型默认选择合适的typeHandler进行处理
+        parameterType 主要指定参数类型，可以是int, short, long, string等类型，也可以是复杂类型（如对象）
+     3. resultType (resultType 与 resultMap 二选一配置)
+        resultType用以指定返回类型，指定的类型可以是基本类型，可以是java容器，也可以是javabean
+     4. resultMap (resultType 与 resultMap 二选一配置)
+        resultMap用于引用我们通过 resultMap标签定义的映射类型，这也是mybatis组件高级复杂映射的关键
+     5. flushCache (可选配置)
+        将其设置为 true，任何时候只要语句被调用，都会导致本地缓存和二级缓存都会被清空，默认值：false
+     6. useCache (可选配置)
+        将其设置为 true，将会导致本条语句的结果被二级缓存，默认值：对 select 元素为 true
+     7. timeout (可选配置)
+        这个设置是在抛出异常之前，驱动程序等待数据库返回请求结果的秒数。默认值为 unset（依赖驱动）
+     8. fetchSize (可选配置)
+        这是尝试影响驱动程序每次批量返回的结果行数和这个设置值相等。默认值为 unset（依赖驱动)
+     9. statementType (可选配置)
+        STATEMENT，PREPARED 或 CALLABLE 的一个。这会让 MyBatis 分别使用 Statement，PreparedStatement 或 CallableStatement，默认值：PREPARED
+     10. resultSetType (可选配置)
+        FORWARD_ONLY，SCROLL_SENSITIVE 或 SCROLL_INSENSITIVE 中的一个，默认值为 unset （依赖驱动）
+        ResultSet.TYPE_FORWORD_ONLY 结果集的游标只能向下滚动。
+        ResultSet.TYPE_SCROLL_INSENSITIVE 结果集的游标可以上下移动，当数据库变化时，当前结果集不变。
+        ResultSet.TYPE_SCROLL_SENSITIVE 返回可滚动的结果集，当数据库变化时，当前结果集同步改变。
+    -->
+    <select id="list" resultType="com.wpc.bean.User" useCache="true">
+        select * from t_user limit 0,2
     </select>
 
     <select id="query" resultMap="BaseResultMap">
         select * from t_user where id = #{id}
     </select>
 
-    <update id="update">
-        update t_user name = #{name},age = #{age} where id = #{id}
+    <!--
+     1. id （必须配置）
+       一个命名空间（namespace） 对应一个dao接口（id是命名空间中的唯一标识符，可被用来代表这条语句）,
+       这个id也应该对应dao里面的某个方法（相当于方法的实现implement），因此id 应该与方法名一致
+     2. parameterType （可选配置, 默认为mybatis自动选择处理）
+       将要传入语句的参数的完全限定类名或别名， 如果不配置，mybatis会通过ParameterHandler 根据参数类型默认选择合适的typeHandler进行处理
+       parameterType 主要指定参数类型，可以是int, short, long, string等类型，也可以是复杂类型（如对象）
+     3. flushCache （可选配置，默认配置为true）
+       将其设置为 true，任何时候只要语句被调用，都会导致本地缓存和二级缓存都会被清空，默认值：true（对应插入、更新和删除语句）
+     4. statementType （可选配置，默认配置为PREPARED）
+       STATEMENT，PREPARED 或 CALLABLE 的一个。这会让 MyBatis 分别使用 Statement，PreparedStatement 或 CallableStatement，默认值：PREPARED。
+     5. keyProperty （可选配置， 默认为unset）用于指定传入对象的成员变量。
+       （仅对 insert 和 update 有用）唯一标记一个属性，MyBatis 会通过 getGeneratedKeys 的返回值或者通过 insert 语句的 selectKey 子元素设置它的键值，默认：unset。
+       如果希望得到多个生成的列，也可以是逗号分隔的属性名称列表。
+     6. keyColumn （可选配置）用于指定数据库table中的主键。
+       （仅对 insert 和 update 有用）通过生成的键值设置表中的列名，这个设置仅在某些数据库（像 PostgreSQL）是必须的，当主键列不是表中的第一列的时候需要设置。
+       如果希望得到多个生成的列，也可以是逗号分隔的属性名称列表。
+     7. useGeneratedKeys (可选配置， 默认为false)
+       （仅对 insert 和 update 有用）这会令 MyBatis 使用 JDBC 的 getGeneratedKeys 方法来取出由数据库内部生成的主键（比如：像 MySQL 和 SQL Server 这样的关系数据库管理系统的自动递增字段），默认值：false。
+     8. timeout （可选配置， 默认为unset, 依赖驱动）
+       这个设置是在抛出异常之前，驱动程序等待数据库返回请求结果的秒数。默认值为 unset（依赖驱动）。
+     -->
+    <insert id="insert">
+        insert into t_user (name,age) values (#{name}, #{age})
+    </insert>
+
+    <update id="update" keyProperty="id" useGeneratedKeys="true">
+        update t_user set name = #{name},age = #{age} where id = #{id}
     </update>
 
     <delete id="delete">
         delete from t_user where id = #{id}
     </delete>
 
-    <insert id="insert">
-        insert into t_user (name,age) values (#{name}, #{age})
-    </insert>
 </mapper>

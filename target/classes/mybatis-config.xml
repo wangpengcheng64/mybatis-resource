@@ -20,6 +20,24 @@
         <!-- 首先二级缓存默认是开启的-->
         <!-- 其次需要在 UserMapper.xml 文件中开启缓存，配置了这个才生效 <cache></cache> -->
         <setting name="cacheEnabled" value="true"/>
+        <!-- 以秒为单位的全局sql超时时间设置,当超出了设置的超时时间时,会抛出SQLTimeoutException -->
+        <setting name="defaultStatementTimeout" value="300"/>
+        <!--设置查询返回值数量，可以被查询数值覆盖  -->
+        <setting name="defaultFetchSize" value="100"/>
+        <!--允许在嵌套语句中使用分页（RowBounds）。如果允许使用则设置为 false，默认值false-->
+        <setting name="safeRowBoundsEnabled" value="false"/>
+        <!--允许在嵌套语句中使用分页（ResultHandler）。如果允许使用则设置为 false，默认值true-->
+        <setting name="safeResultHandlerEnabled" value="true"/>
+        <!-- 自动映射类型，可选值为NONE、PARTIAL和FULL，参考AutoMappingBehavior枚举 -->
+        <!--NONE：不启用自动映射-->
+        <!--PARTIAL：只对非嵌套的resultMap进行自动映射，默认值-->
+        <!--FULL：对所有的resultMap都进行自动映射-->
+        <setting name="autoMappingBehavior" value="PARTIAL"/>
+        <!--当返回行的所有列都是空时，MyBatis默认返回 null。当开启这个设置时，MyBatis会返回一个空实例。-->
+        <!--请注意，它也适用于嵌套的结果集 （如集合或关联），默认值false-->
+        <setting name="returnInstanceForEmptyRow" value="false"/>
+        <!--请注意，它也适用于嵌套的结果集 （如集合或关联），默认值false-->
+        <setting name="callSettersOnNulls" value="false"/>
     </settings>
 
     <!-- 为JAVA Bean起类别名 -->
@@ -45,7 +63,6 @@
                 <property name="url" value="jdbc:mysql://localhost:3306/test1"/>
                 <property name="username" value="root"/>
                 <property name="password" value="root"/> -->
-
                 <!-- 上面指定了数据库配置文件， 配置文件里面也是对应的这四个属性 -->
                 <property name="driver" value="${jdbc.driver}"/>
                 <property name="url" value="${jdbc.url}"/>
