@@ -17,6 +17,10 @@
         <!--执行器重用 REUSE-->
         <!--执行器重用语句 批量更新 BATCH-->
         <setting name="defaultExecutorType" value="SIMPLE"/>
+        <!--MyBatis利用本地缓存（一级缓存）机制（Local Cache）防止循环引用（circular references）和加速重复嵌套查询-->
+        <!--SESSION，这种情况下会缓存一个会话中执行的所有查询，默认值-->
+        <!--STATEMENT，本地会话仅用在语句执行上，对相同 SqlSession 的不同调用将不会共享数据-->
+        <setting name="localCacheScope" value="SESSION"/>
         <!-- 首先二级缓存默认是开启的-->
         <!-- 其次需要在 UserMapper.xml 文件中开启缓存，配置了这个才生效 <cache></cache> -->
         <setting name="cacheEnabled" value="true"/>
@@ -47,6 +51,11 @@
         <!-- 别名方式2，自动扫描，将JAVA类的类名作为类的类别名 -->
         <package name="pojo"/>
     </typeAliases>
+
+    <!-- 拦截器配置 -->
+    <plugins>
+        <plugin interceptor="com.wpc.interceptor.SqlInterceptor"/>
+    </plugins>
 
     <!-- 配置mybatis运行环境 -->
     <environments default="default">

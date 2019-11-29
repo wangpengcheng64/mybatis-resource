@@ -52,6 +52,11 @@
         <package name="pojo"/>
     </typeAliases>
 
+    <!-- 拦截器配置 -->
+    <plugins>
+        <plugin interceptor="com.wpc.interceptor.SqlInterceptor"/>
+    </plugins>
+
     <!-- 配置mybatis运行环境 -->
     <environments default="default">
         <environment id="default">

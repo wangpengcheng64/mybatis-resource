@@ -7,7 +7,9 @@ import org.apache.ibatis.session.SqlSessionFactory;
 import org.apache.ibatis.session.SqlSessionFactoryBuilder;
 
 import java.io.InputStream;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class UserTest {
 
@@ -32,7 +34,10 @@ public class UserTest {
     }
 
     private static void list(UserMapper mapper) {
-        List<User> list = mapper.list();
+        Map<String, Object> params = new HashMap<>();
+        params.put("page", 1);
+        params.put("size", 2);
+        List<User> list = mapper.list(params);
         for (User user : list) {
             System.out.println(user);
         }

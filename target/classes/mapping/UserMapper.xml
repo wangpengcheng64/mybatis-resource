@@ -48,7 +48,7 @@
         ResultSet.TYPE_SCROLL_SENSITIVE 返回可滚动的结果集，当数据库变化时，当前结果集同步改变。
     -->
     <select id="list" resultType="com.wpc.bean.User" useCache="true">
-        select * from t_user limit 0,2
+        select * from t_user
     </select>
 
     <select id="query" resultMap="BaseResultMap">

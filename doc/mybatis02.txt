@@ -56,7 +56,7 @@ public class MapperRegistry {
     }
 }
 public class MapperAnnotationBuilder {
-public MapperAnnotationBuilder(Configuration configuration, Class<?> type) {
+    public MapperAnnotationBuilder(Configuration configuration, Class<?> type) {
         String resource = type.getName().replace('.', '/') + ".java (best guess)";
         this.assistant = new MapperBuilderAssistant(configuration, resource);
         this.configuration = configuration;
