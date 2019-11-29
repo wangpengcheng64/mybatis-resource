@@ -1,4 +1,4 @@
-9，事务管理机制
+9，mybatis事务管理机制实现原理
 public class XMLConfigBuilder extends BaseBuilder {
     // 解析mybatis配置文件configuration标签，实际上是给configuration对象属性赋值，下面都是解析配置文件中configuration节点中各子节点属性
     private void parseConfiguration(XNode root) {
