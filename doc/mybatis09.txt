@@ -1,0 +1,294 @@
+9，事务管理机制
+public class XMLConfigBuilder extends BaseBuilder {
+    // 解析mybatis配置文件configuration标签，实际上是给configuration对象属性赋值，下面都是解析配置文件中configuration节点中各子节点属性
+    private void parseConfiguration(XNode root) {
+        ...
+        // read it after objectFactory and objectWrapperFactory issue #631
+        environmentsElement(root.evalNode("environments")); // 环境配置
+        ...
+    }
+    private void environmentsElement(XNode context) throws Exception {
+        if (context != null) {
+            if (environment == null) {
+                // 解析environments节点上的default属性值 <environments default="default">
+                environment = context.getStringAttribute("default");
+            }
+            // 递归解析子节点
+            for (XNode child : context.getChildren()) {
+                // 获取id属性，用id来区别不同环境
+                String id = child.getStringAttribute("id");
+                // 根据environments的default属性去加载对应的环境
+                if (isSpecifiedEnvironment(id)) {
+                    // 事务，mybatis有两种：JDBC 和 MANAGED, 配置为JDBC则直接使用JDBC的事务，配置为MANAGED则是将事务托管给容器
+                    TransactionFactory txFactory = transactionManagerElement(child.evalNode("transactionManager"));
+                    // 解析数据源信息，并创建dataSource对象（PooledDataSource/UnpooledDataSource）
+                    DataSourceFactory dsFactory = dataSourceElement(child.evalNode("dataSource"));
+                    // PooledDataSource：支持数据源连接池，数据源连接可重复使用
+                    // UnpooledDataSource：不支持数据源连接池，每次获取连接都是创建新的
+                    DataSource dataSource = dsFactory.getDataSource();
+                    Environment.Builder environmentBuilder = new Environment.Builder(id).transactionFactory(txFactory).dataSource(dataSource);
+                    // 将数据源信息设置到configuration中
+                    configuration.setEnvironment(environmentBuilder.build());
+                }
+            }
+        }
+    }
+    // 获取TransactionFactory对象
+    private TransactionFactory transactionManagerElement(XNode context) throws Exception {
+        if (context != null) {
+            // 获取transactionManager类型
+            String type = context.getStringAttribute("type");
+            Properties props = context.getChildrenAsProperties();
+            // 通过类型获取TransactionFactory对象（JdbcTransactionFactory或ManagedTransactionFactory）
+            TransactionFactory factory = (TransactionFactory) resolveClass(type).newInstance();
+            factory.setProperties(props);
+            return factory;
+        }
+        throw new BuilderException("Environment declaration requires a TransactionFactory.");
+    }
+    // 解析数据源信息dataSource
+    private DataSourceFactory dataSourceElement(XNode context) throws Exception {
+        if (context != null) {
+            // mybatis提供了3种数据源类型，分别是：POOLED,UNPOOLED,JNDI, 配置文件中有对应解释
+            String type = context.getStringAttribute("type");
+            // 解析property标签（数据库连接属性）
+            Properties props = context.getChildrenAsProperties();
+            // 通过类型获取DataSourceFactory对象（JndiDataSourceFactory/PooledDataSourceFactory/UnpooledDataSourceFactory）
+            DataSourceFactory factory = (DataSourceFactory) resolveClass(type).newInstance();
+            factory.setProperties(props);
+            return factory;
+        }
+        throw new BuilderException("Environment declaration requires a DataSourceFactory.");
+    }
+}
+// 在创建sqlSession对象时（第二节有介绍），会创建Transaction对象
+public class JdbcTransactionFactory implements TransactionFactory {
+    @Override
+    public void setProperties(Properties props) {
+    }
+    @Override
+    public Transaction newTransaction(Connection conn) {
+        return new JdbcTransaction(conn);
+    }
+    // 数据源、事务隔离级别和是否自动提交创建Transaction
+    @Override
+    public Transaction newTransaction(DataSource ds, TransactionIsolationLevel level, boolean autoCommit) {
+        return new JdbcTransaction(ds, level, autoCommit);
+    }
+}
+public class ManagedTransactionFactory implements TransactionFactory {
+    // 关闭连接，可以在配置文件中设置
+    private boolean closeConnection = true;
+    @Override
+    public void setProperties(Properties props) {
+        if (props != null) {
+            String closeConnectionProperty = props.getProperty("closeConnection");
+            if (closeConnectionProperty != null) {
+                closeConnection = Boolean.valueOf(closeConnectionProperty);
+            }
+        }
+    }
+    @Override
+    public Transaction newTransaction(Connection conn) {
+        return new ManagedTransaction(conn, closeConnection);
+    }
+    // 不做事务的提交和回滚
+    @Override
+    public Transaction newTransaction(DataSource ds, TransactionIsolationLevel level, boolean autoCommit) {
+        // Silently ignores autocommit and isolation level, as managed transactions are entirely
+        // controlled by an external manager.  It's silently ignored so that
+        // code remains portable between managed and unmanaged configurations.
+        return new ManagedTransaction(ds, level, closeConnection);
+    }
+}
+// 在创建Statement对象时，通过Transaction获取数据库连接对象
+public class SimpleExecutor extends BaseExecutor {
+    private Statement prepareStatement(StatementHandler handler, Log statementLog) throws SQLException {
+        Statement stmt;
+        // 获取数据库连接对象，并判断是否开启Debug模式（如果开启，则生成代理对象进行日志输出）
+        Connection connection = getConnection(statementLog);
+        // 获取预编译对象PrepareStatement
+        stmt = handler.prepare(connection, transaction.getTimeout());
+        // sql占位符处理，对预编译的SQL语句进行参数设置
+        handler.parameterize(stmt);
+        return stmt;
+    }
+    protected Connection getConnection(Log statementLog) throws SQLException {
+        Connection connection = transaction.getConnection();
+        if (statementLog.isDebugEnabled()) {
+            return ConnectionLogger.newInstance(connection, statementLog, queryStack);
+        } else {
+            return connection;
+        }
+    }
+}
+// 直接使用了JDBC的提交和回滚设置，它依赖于从数据源得到的连接Connection来管理事务作用域。
+public class JdbcTransaction implements Transaction {
+    private static final Log log = LogFactory.getLog(JdbcTransaction.class);
+    protected Connection connection; // 连接对象
+    protected DataSource dataSource; // 数据源
+    protected TransactionIsolationLevel level; // 事务隔离级别
+    protected boolean autoCommit; // 是否自动提交
+
+    public JdbcTransaction(DataSource ds, TransactionIsolationLevel desiredLevel, boolean desiredAutoCommit) {
+        dataSource = ds;
+        level = desiredLevel;
+        autoCommit = desiredAutoCommit;
+    }
+    public JdbcTransaction(Connection connection) {
+        this.connection = connection;
+    }
+    // 获取连接对象
+    @Override
+    public Connection getConnection() throws SQLException {
+        if (connection == null) {
+            openConnection();
+        }
+        return connection;
+    }
+    // 事务提交，前提是未设置自动提交
+    @Override
+    public void commit() throws SQLException {
+        if (connection != null && !connection.getAutoCommit()) {
+            if (log.isDebugEnabled()) {
+                log.debug("Committing JDBC Connection [" + connection + "]");
+            }
+            connection.commit();
+        }
+    }
+    // 事务回滚，前提是未设置自动提交
+    @Override
+    public void rollback() throws SQLException {
+        if (connection != null && !connection.getAutoCommit()) {
+            if (log.isDebugEnabled()) {
+                log.debug("Rolling back JDBC Connection [" + connection + "]");
+            }
+            connection.rollback();
+        }
+    }
+    // 关闭连接
+    @Override
+    public void close() throws SQLException {
+        if (connection != null) {
+            resetAutoCommit();
+            if (log.isDebugEnabled()) {
+                log.debug("Closing JDBC Connection [" + connection + "]");
+            }
+            connection.close();
+        }
+    }
+    // 设置自动提交
+    protected void setDesiredAutoCommit(boolean desiredAutoCommit) {
+        try {
+            if (connection.getAutoCommit() != desiredAutoCommit) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Setting autocommit to " + desiredAutoCommit + " on JDBC Connection [" + connection + "]");
+                }
+                connection.setAutoCommit(desiredAutoCommit);
+            }
+        } catch (SQLException e) {
+            // Only a very poorly implemented driver would fail here,
+            // and there's not much we can do about that.
+            throw new TransactionException("Error configuring AutoCommit.  "
+                    + "Your driver may not support getAutoCommit() or setAutoCommit(). "
+                    + "Requested setting: " + desiredAutoCommit + ".  Cause: " + e, e);
+        }
+    }
+    // 重置自动提交
+    protected void resetAutoCommit() {
+        try {
+            if (!connection.getAutoCommit()) {
+                // MyBatis does not call commit/rollback on a connection if just selects were performed.
+                // Some databases start transactions with select statements
+                // and they mandate a commit/rollback before closing the connection.
+                // A workaround is setting the autocommit to true before closing the connection.
+                // Sybase throws an exception here.
+                if (log.isDebugEnabled()) {
+                    log.debug("Resetting autocommit to true on JDBC Connection [" + connection + "]");
+                }
+                connection.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            if (log.isDebugEnabled()) {
+                log.debug("Error resetting autocommit to true "
+                        + "before closing the connection.  Cause: " + e);
+            }
+        }
+    }
+    // 通过dataSource对象获取连接
+    protected void openConnection() throws SQLException {
+        if (log.isDebugEnabled()) { // 是否开启Debug日志打印
+            log.debug("Opening JDBC Connection");
+        }
+        connection = dataSource.getConnection();
+        if (level != null) { // 事务隔离级别设置
+            connection.setTransactionIsolation(level.getLevel());
+        }
+        // 设置是否自动提交事务
+        setDesiredAutoCommit(autoCommit);
+    }
+    @Override
+    public Integer getTimeout() throws SQLException {
+        return null;
+    }
+}
+// 不提交或回滚一个连接，而是让容器来管理事务的整个生命周期（比如JEE 应用服务器的上下文）
+public class ManagedTransaction implements Transaction {
+    private static final Log log = LogFactory.getLog(ManagedTransaction.class);
+    private DataSource dataSource; // 数据源
+    private TransactionIsolationLevel level; // 事务隔离级别
+    private Connection connection; // 连接对象
+    private final boolean closeConnection; // 是否关闭连接，默认true
+
+    public ManagedTransaction(Connection connection, boolean closeConnection) {
+        this.connection = connection;
+        this.closeConnection = closeConnection;
+    }
+    public ManagedTransaction(DataSource ds, TransactionIsolationLevel level, boolean closeConnection) {
+        this.dataSource = ds;
+        this.level = level;
+        this.closeConnection = closeConnection;
+    }
+    // 获取连接对象
+    @Override
+    public Connection getConnection() throws SQLException {
+        if (this.connection == null) {
+            openConnection();
+        }
+        return this.connection;
+    }
+    // 不做处理，交给容器管理
+    @Override
+    public void commit() throws SQLException {
+        // Does nothing
+    }
+    // 不做处理，交给容器管理
+    @Override
+    public void rollback() throws SQLException {
+        // Does nothing
+    }
+    // 关闭连接
+    @Override
+    public void close() throws SQLException {
+        if (this.closeConnection && this.connection != null) {
+            if (log.isDebugEnabled()) {
+                log.debug("Closing JDBC Connection [" + this.connection + "]");
+            }
+            this.connection.close();
+        }
+    }
+    // 通过dataSource对象获取连接
+    protected void openConnection() throws SQLException {
+        if (log.isDebugEnabled()) {
+            log.debug("Opening JDBC Connection");
+        }
+        this.connection = this.dataSource.getConnection();
+        if (this.level != null) {
+            this.connection.setTransactionIsolation(this.level.getLevel());
+        }
+    }
+    @Override
+    public Integer getTimeout() throws SQLException {
+        return null;
+    }
+}

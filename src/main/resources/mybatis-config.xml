@@ -60,7 +60,8 @@
     <!-- 配置mybatis运行环境 -->
     <environments default="default">
         <environment id="default">
-            <!-- type="JDBC" 代表使用JDBC的提交和回滚来管理事务 -->
+            <!--JDBC：这个配置就是直接使用了 JDBC 的提交和回滚设置，它依赖于从数据源得到的连接来管理事务作用域。-->
+            <!--MANAGED：这个配置几乎没做什么。它从来不提交或回滚一个连接，而是让容器来管理事务的整个生命周期（比如JEE 应用服务器的上下文）-->
             <transactionManager type="JDBC"/>
             <!-- mybatis提供了3种数据源类型，分别是：POOLED,UNPOOLED,JNDI -->
             <!-- POOLED 表示支持JDBC数据源连接池 -->
